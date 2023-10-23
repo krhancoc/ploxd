@@ -1,0 +1,17 @@
+find_package(fmt REQUIRED)
+
+add_executable(ploxd ploxd.cc)
+add_executable(plox plox.cc)
+add_executable(containerd containerd.cc)
+target_include_directories(ploxd PRIVATE ../../include)
+target_include_directories(ploxd PRIVATE .)
+
+target_link_libraries(ploxd ssl fmt::fmt md crypto pthread python3.7m)
+target_link_libraries(containerd ssl fmt::fmt md crypto pthread python3.7m)
+
+# add_executable(client client.cc)
+# target_include_directories(client PRIVATE ../include)
+# target_include_directories(client PRIVATE .)
+#
+# target_link_libraries(client ssl fmt::fmt md crypto pthread python3.7m ploxclient)
+#
