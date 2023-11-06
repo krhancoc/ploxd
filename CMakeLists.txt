@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 project(ploxd VERSION 1.0 DESCRIPTION "Lambda Container Library")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_C_COMPILER clang15)
-set(CMAKE_CPP_COMPILER clang++15)
+set(CMAKE_C_COMPILER clang13)
+set(CMAKE_CPP_COMPILER clang++13)
 
 link_directories(/usr/local/lib)
 

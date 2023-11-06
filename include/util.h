@@ -18,8 +18,8 @@ namespace ch = std::chrono;
 #define OFFSET_ADD(ptr, amount, cast) ((cast)(uintptr_t)ptr + amount)
 
 #define BIND_REF(_name)                                                        \
-  __strong_reference(__plox_##_name, _name);                                   \
-  __strong_reference(__plox_##_name, _##_name);
+  __strong_reference(__plox_##_name, _name);                                   
+  //__strong_reference(__plox_##_name, _##_name);
 
 template<typename Stream, typename Arg1>
 void _row(Stream &ss, int width, Arg1 arg) {
