@@ -14,8 +14,25 @@
 
 #include "debug.h"
 #include "commands.h"
+#include "policy.h"
 
 const std::filesystem::path PLOX_DEVICE = "/dev/plox";
+
+int ServiceLibCServices(int sock)
+{
+	return 0;
+}
+
+int SendStartMessage(int sock)
+{
+	int writeout = write(sock, "START", 5);
+	if (writeout < 0) {
+		perror("issue");
+		return -1;
+	}
+
+	return 0;
+}
 
 int 
 CreateServerSocket()
@@ -49,6 +66,8 @@ HandleConnection(int connection)
 {
 	char buffer[4096];
 	int pairs[2];
+
+	auto policy = PloxPolicy("policyfile");
 
 	memset(buffer, '\0', 4096);
 	int readin = read(connection, buffer, 4096);
@@ -86,15 +105,19 @@ HandleConnection(int connection)
 
 	int pid = fork();
 	if (pid) {
-		memset(buffer, '\0', 4096);
-		int readin = read(pairs[0], buffer, 4096);
-		if (readin < 0) {
-			perror("issue");
-			close(connection);
+		int error = policy.setupPolicy(pid);
+		if (error) {
+			ERROR("Problem setting up policy");
 			return;
 		}
 
-		INFO("Message Recieved: {}", buffer);
+		error = SendStartMessage(pairs[0]);
+		if (error) {
+			ERROR("Problem with sending message to container");
+			return;
+		}
+
+		ServiceLibCServices(pairs[0]);
 	} else {
 		if (execve("/usr/home/ryan/ploxd/build/src/ploxd/containerd", argv.data(), NULL) == -1) {
 			perror("execve");

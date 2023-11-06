@@ -1,6 +1,6 @@
 find_package(fmt REQUIRED)
 
-add_executable(ploxd ploxd.cc)
+add_executable(ploxd ploxd.cc policy.cc)
 add_executable(plox plox.cc)
 add_executable(containerd containerd.cc)
 target_include_directories(ploxd PRIVATE ../../include)

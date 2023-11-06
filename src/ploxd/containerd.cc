@@ -28,12 +28,12 @@ int main(int argc, char *argv[])
 
 	std::cout << argv[0] << std::endl;
 
-	int writeout = write(ploxd, "HELLO", 6);
-	if (writeout < 0) {
-		perror("NOOO");
+	// Wait for confirmation from containerd
+	int readin = read(ploxd, buffer, 1024);
+	if (readin < 0) {
+		perror("[Container] Error getting confirmation, shutting down");
 		return -1;
 	}
-	printf("Executing %s\n", argv[0]);
 
 	execve(argv[0], argv, envp.data());
 	return 0;
