@@ -32,6 +32,7 @@
 // Start Globals 
 int kcov_device = -1;
 std::ofstream yf;
+int YF_FD = -1;
 char self_path[256];
 const char *ONLY_IP = "ONLY_IP";
 const char *NSDISPATCH = "nsdispatch";
@@ -40,9 +41,11 @@ const char *NSDISPATCH = "nsdispatch";
 	do { \
 		auto env_opt = std::getenv("OVERLAY_OPT"); \
 		if (env_opt && strcmp(env_opt, ONLY_IP) == 0) { \
+			yell("CALL_SITE:"); \
 			yell(__VA_ARGS__); \
 			yell(get_backtrace(ONLY_IP)); \
 		} else { \
+			yell("CALL_SITE:"); \
 			yell(__VA_ARGS__); \
 			yell(get_backtrace(NULL)); \
 		} \
@@ -110,13 +113,16 @@ extern "C" {
 	__strong_reference(__plox_##_name, _name); \
 	__strong_reference(__plox_##_name, _##_name);
 
-#define TYPEDEF_INST(return_val, name, ...) \
-  typedef return_val (* name)(__VA_ARGS__); \
-  name __real_##name = nullptr
+#define TYPEDEF_INST(return_val, _name, ...) \
+  typedef return_val (* _name##_f)(__VA_ARGS__); \
+  _name##_f __real_##_name##_f = nullptr; \
+  return_val __sys_##_name(__VA_ARGS__)
 
-TYPEDEF_INST(struct hostent *, gethostbyname_f, const char *host);
-TYPEDEF_INST(int, getaddrinfo_f, const char *, const char *, const struct addrinfo *, struct addrinfo **);
-TYPEDEF_INST(int, nsdispatch_f, void *, const ns_dtab[], const char *, const char *method_name, const ns_src defaults[], ...);
+TYPEDEF_INST(struct hostent *, gethostbyname, const char *host);
+TYPEDEF_INST(int, getaddrinfo, const char *, const char *, const struct addrinfo *, struct addrinfo **);
+TYPEDEF_INST(int, nsdispatch, void *, const ns_dtab[], const char *, const char *method_name, const ns_src defaults[], ...);
+TYPEDEF_INST(ssize_t, write, int fd, const void *buffer, size_t size);
+TYPEDEF_INST(int, close, int fd);
 
 
 int __sys_open(const char *, int, ...);
@@ -189,7 +195,7 @@ get_self_path() {
 }
 
 
-#define BUFFER_SIZE (512)
+#define BUFFER_SIZE (1024)
 /* 
  * We have to be careful with open here as it used
  * in startup. This is why we have a buffer as malloc may not
@@ -229,19 +235,21 @@ int __plox_open(const char *path, int flags, ...) {
 
 	if (fd < 0) {
 		snprintf(buffer, BUFFER_SIZE, "Error interposing on %s\n", path);
-		write(STDERR_FILENO, buffer, strlen(buffer));
+		__sys_write(STDERR_FILENO, buffer, strlen(buffer));
 		exit(-2);
 	}
 
-	if (__real_nsdispatch_f == nullptr) {
-		printf("");
-		__real_nsdispatch_f = (nsdispatch_f)dlsym(RTLD_NEXT, "nsdispatch");
-	}
-	snprintf(buffer, BUFFER_SIZE, "open %s %d %d = %d\n", path, flags, mode, retfd);
-	write(fd, buffer, strlen(buffer));
+	memset(buffer, '\0', BUFFER_SIZE);
+	snprintf(buffer, BUFFER_SIZE, "\nCALL_SITE:\nopen %s %d %d = %d\n", path, flags, mode, retfd);
+	__sys_write(fd, buffer, strlen(buffer));
+
+	memset(buffer, '\0', BUFFER_SIZE);
 	snprintf(buffer, BUFFER_SIZE, "%s\n", get_backtrace(NULL).c_str());
-	write(fd, buffer, strlen(buffer));
-	close(fd);
+
+	// Ensure we have the new line character;
+	buffer[BUFFER_SIZE - 1] = '\n';
+	__sys_write(fd, buffer, strlen(buffer));
+	__sys_close(fd);
 
 	return retfd;
 }
@@ -302,7 +310,7 @@ __plox_nsdispatch(void *retval, const ns_dtab dtab[], const char *database,
 	    );
 }
 
-struct hostent * gethostbyname(const char *name)
+struct hostent * __plox_gethostbyname(const char *name)
 {
 	__real_gethostbyname_f = (gethostbyname_f)dlsym(RTLD_NEXT, "gethostbyname");
 	auto hostentret = __real_gethostbyname_f(name);
@@ -319,9 +327,31 @@ __plox_getaddrinfo(const char *hostname, const char *servname, const struct addr
 	return ret;
 }
 
+
+TYPEDEF_INST(ssize_t, read, int fd, void *buffer, size_t size);
+ssize_t
+__plox_read(int fd, void *buffer, size_t size)
+{
+	ssize_t ret = __sys_read(fd, buffer, size);
+	YELL("read", fd, size, "=", ret);
+	return ret;
+}
+
+ssize_t
+__plox_write(int fd, const void *buffer, size_t size)
+{
+	ssize_t ret = __sys_write(fd, buffer, size);
+	if (fd != YF_FD)
+		YELL("write", fd, size, "=", ret);
+	return ret;
+}
+
 BIND_REF(open);
 BIND_REF(connect);
 BIND_REF(socket);
 BIND_REF(getaddrinfo);
+BIND_REF(gethostbyname);
+BIND_REF(read);
+BIND_REF(write);
 //BIND_REF(nsdispatch);
 } // EXTERN C
