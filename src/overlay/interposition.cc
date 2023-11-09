@@ -37,16 +37,17 @@ char self_path[256];
 const char *ONLY_IP = "ONLY_IP";
 const char *NSDISPATCH = "nsdispatch";
 
+
 #define YELL(...) \
 	do { \
 		auto env_opt = std::getenv("OVERLAY_OPT"); \
 		if (env_opt && strcmp(env_opt, ONLY_IP) == 0) { \
 			yell("CALL_SITE:"); \
-			yell(__VA_ARGS__); \
+			yell(getpid(), __VA_ARGS__); \
 			yell(get_backtrace(ONLY_IP)); \
 		} else { \
 			yell("CALL_SITE:"); \
-			yell(__VA_ARGS__); \
+			yell(getpid(), __VA_ARGS__); \
 			yell(get_backtrace(NULL)); \
 		} \
 	} while(false); 
@@ -218,7 +219,7 @@ int __plox_open(const char *path, int flags, ...) {
 		return __sys_open(path, flags, mode);
 	}
 
-	if (strcmp(path, YELL_LOG) == 0) {
+	if (strcmp(path, get_yell_name()) == 0) {
 		// Make sure we dont recrusive on the log;
 		return __sys_open(path, flags, mode);
 	}
@@ -228,19 +229,13 @@ int __plox_open(const char *path, int flags, ...) {
 	}
 
 	auto retfd = __sys_open(path, flags, mode);
-	int fd = __sys_open(YELL_LOG, O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fd = __sys_open(get_yell_name(), O_WRONLY | O_APPEND | O_CREAT, 0666);
 	if (fd < 0 && errno == EEXIST) {
-		fd = __sys_open(YELL_LOG, O_WRONLY | O_APPEND);
-	}
-
-	if (fd < 0) {
-		snprintf(buffer, BUFFER_SIZE, "Error interposing on %s\n", path);
-		__sys_write(STDERR_FILENO, buffer, strlen(buffer));
-		exit(-2);
+		fd = __sys_open(get_yell_name(), O_WRONLY | O_APPEND);
 	}
 
 	memset(buffer, '\0', BUFFER_SIZE);
-	snprintf(buffer, BUFFER_SIZE, "\nCALL_SITE:\nopen %s %d %d = %d\n", path, flags, mode, retfd);
+	snprintf(buffer, BUFFER_SIZE, "\nCALL_SITE:\n%d open %s %d %d = %d\n", getpid(), path, flags, mode, retfd);
 	__sys_write(fd, buffer, strlen(buffer));
 
 	memset(buffer, '\0', BUFFER_SIZE);
@@ -346,12 +341,187 @@ __plox_write(int fd, const void *buffer, size_t size)
 	return ret;
 }
 
+TYPEDEF_INST(int, fstatat, int fd, const char *, struct stat *sb, int flags);
+int
+__plox_fstatat(int fd, const char *path, struct stat *sb, int flags)
+{
+	write(2, "FSTATAT?\n", 10);
+	int ret = __sys_fstatat(fd, path, sb, flags);
+	YELL("fstatat", fd, path, flags, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, fstat, int, struct stat *);
+int
+__plox_fstat(int fd, struct stat *sb)
+{
+	int ret = __sys_fstat(fd, sb);
+	YELL("fstat", fd, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, fcntl, int, int, ...);
+int
+__plox_fcntl(int fd, int cmd, ...)
+{
+	va_list args;
+	va_start(args, cmd);
+	long opt = va_arg(args, long);
+	va_end(args);
+
+	int ret = __sys_fcntl(fd, cmd, opt);
+
+	YELL("fcntl", fd, cmd, opt, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, kqueue, void);
+int
+__plox_kqueue(void)
+{
+	int ret = __sys_kqueue();
+	__sys_write(2, "WTF?\n", 5);
+	YELL("kqueue", "=", ret);
+	return ret;
+}
+	
+TYPEDEF_INST(int, kevent, int kq, const struct kevent *, int, struct kevent *, int, const struct timespec *);
+int
+__plox_kevent(int kq, const struct kevent *cl, int nchanges, struct kevent *el, int nevents, const struct timespec *to)
+{
+	int ret = __sys_kevent(kq, cl, nchanges, el, nevents, to);
+	YELL("kevent", kq, nchanges, nevents, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, fsync, int);
+int
+__plox_fsync(int fd)
+{
+	int ret = __sys_fsync(fd);
+	YELL("fsync", fd, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, openat, int, const char *, int, ...);
+int
+__plox_openat(int dirfd, const char *path, int flags, ...)
+{
+	va_list args;
+	int mode;
+	if ((flags & O_CREAT) != 0) {
+		va_start(args, flags);
+		mode = va_arg(args, int);
+		va_end(args);
+	} else {
+		mode = 0;
+	}
+	int ret = __sys_openat(dirfd, path, flags, mode);
+	YELL("openat", dirfd, path, flags, mode);
+	return ret;
+}
+
+TYPEDEF_INST(int, dup2, int, int);
+int
+__plox_dup2(int old, int newfd)
+{
+	int ret = __sys_dup2(old, newfd);
+	YELL("dup2", old, newfd, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, dup, int);
+int
+__plox_dup(int old)
+{
+	int ret = __sys_dup(old);
+	YELL("dup", old, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, fork, void);
+int
+__plox_fork(void)
+{
+	int ret = __sys_fork();
+	if (ret != 0) {
+		YELL("fork", "=", ret);
+	} else {
+		YF_FD = -1;
+		YELL_LOG[0] = '\0';
+	}
+
+	return ret;
+}
+
+TYPEDEF_INST(int, accept, int, struct sockaddr *, socklen_t *);
+int
+__plox_accept(int s, struct sockaddr * addr, socklen_t * len)
+{
+	int ret = __sys_accept(s, addr, len);
+	YELL("accept", s, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, accept4, int, struct sockaddr * , socklen_t * , int);
+int
+__plox_accept4(int s, struct sockaddr * addr, socklen_t * len, int flags)
+{
+	int ret = __sys_accept4(s, addr, len, flags);
+	YELL("accept4", s, flags, "=", ret);
+	return ret;
+}
+
+TYPEDEF_INST(int, bind, int s, const struct sockaddr *addr, socklen_t len);
+int 
+__plox_bind(int s, const struct sockaddr *addr, socklen_t len)
+{
+	int ret = __sys_bind(s, addr, len);
+	YELL("bind", s, sockaddr_tostring(addr, len), len);
+	return ret;
+}
+
+TYPEDEF_INST(int, listen, int s, int backlog);
+int
+__plox_listen(int s, int backlog)
+{
+	int ret = __sys_listen(s, backlog);
+	YELL("listen", s, backlog);
+	return ret;
+}
+
+TYPEDEF_INST(void *, dlopen,  const char *path, int of);
+void *
+__plox_dlopen(const char *path, int of)
+{
+	__real_dlopen_f = (dlopen_f)dlsym(RTLD_NEXT, "dlopen");
+	void *ret = __real_dlopen_f(path, of);
+	YELL("dlopen", path, of, "=", ret);
+	return ret;
+}
+
+
+
 BIND_REF(open);
+BIND_REF(openat);
 BIND_REF(connect);
 BIND_REF(socket);
 BIND_REF(getaddrinfo);
 BIND_REF(gethostbyname);
 BIND_REF(read);
 BIND_REF(write);
-//BIND_REF(nsdispatch);
+BIND_REF(fstatat);
+BIND_REF(fstat);
+BIND_REF(fcntl);
+BIND_REF(kqueue);
+BIND_REF(kevent);
+BIND_REF(fsync);
+BIND_REF(dup);
+BIND_REF(dup2);
+BIND_REF(fork);
+BIND_REF(accept);
+BIND_REF(accept4);
+BIND_REF(bind);
+BIND_REF(listen);
+BIND_REF(dlopen);
 } // EXTERN C

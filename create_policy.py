@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 import os
 import sys
-CREATE_CALLS = ["open", "socket"]
-EDGE_CALLS = ["mmap"]
-END_CALLS = ["close"]
-FB_CALLS = ["gethostbyname", "getaddrinfo"]
-
+import fcntl
+import glob
+import traceback
 
 class Operation:
-    def __init__(self):
-        pass
-
-
-class ResourcePolicy:
     def __init__(self, op, args):
         self.op = op
         self.args = args
-        self.allow_operations = []
 
     def is_same(self, other):
         if (self.op != other.op):
@@ -34,11 +26,62 @@ class ResourcePolicy:
     def __str__(self):
         return "{} {}".format(self.op, self.args)
 
+class ResourcePolicy:
+    def __init__(self, op, args):
+        self.create_call = Operation(op, args)
+        self.operations = []
 
-class GlobalPolicy:
+    def is_same(self, rp):
+        return self.create_call.is_same(rp.create_call)
+
+    def add_operation(self, op, args, fd_location=0):
+        args[fd_location] = "$FD"
+        operation = Operation(op, args)
+        for i, x in enumerate(self.operations):
+            if x.is_same(operation):
+                return self.operations[i]
+
+        self.operations.append(operation)
+        return self.operations[-1]
+
+    def merge(self, other):
+        assert(self.is_same(other))
+        added = []
+        for x in other.operations:
+            found = False
+            for y in self.operations:
+                if y.is_same(x):
+                    found = True
+                    break
+            # There was a global call that was the same, continue
+            if found:
+                continue
+
+            added.append(x)
+
+        self.operations.extend(added)
+
+    def __str__(self):
+        final = "{} {{\n".format(self.create_call)
+        for r in self.operations:
+            final += "\t{},\n".format(r)
+        final += "}}\n"
+        return final
+
+class ProcessPolicy:
     def __init__(self):
         self.resources = []
         self.global_calls = []
+        self.fd_cache = {}
+
+    def add_global(self, op, args):
+        operation = Operation(op, args)
+        for i, x in enumerate(self.global_calls):
+            if x.is_same(operation):
+                return self.global_calls[i]
+
+        self.global_calls.append(operation)
+        return self.global_calls[-1]
 
     def add_policy(self, op, args):
         rp = ResourcePolicy(op, args) 
@@ -49,53 +92,183 @@ class GlobalPolicy:
         self.resources.append(rp)
         return self.resources[-1]
 
+    def merge(self, other):
+        # Go through all globals and dedupe
+        added = []
+        for x in other.global_calls:
+            found = False
+            for y in self.global_calls:
+                if y.is_same(x):
+                    found = True
+                    break
+            # There was a global call that was the same, continue
+            if found:
+                continue
 
-def create_policy(trace_file):
+            added.append(x)
+
+        self.global_calls.extend(added)
+
+        added = [] 
+        for x in other.resources:
+            found = False
+            same_as = None
+            for y in self.resources:
+                if x.is_same(y):
+                    same_as = y
+                    found = True
+                    break
+
+            if found:
+                y.merge(x)
+            else:
+                added.append(x)
+
+        self.resources.extend(added)
+
+    def __str__(self):
+        fin = ""
+        for x in self.global_calls:
+            fin += str(x) + "\n"
+
+        for x in self.resources:
+            fin += str(x)
+        
+        return fin
+
+policies = {}
+
+def DEFAULT_CREATE(policy, op, args, ret):
+    if (int(ret) != -1):
+        rp = policy.add_policy(op, args)
+        policy.fd_cache[ret] = rp
+
+def DEFAULT_FD_0(policy, op, args, ret):
+    if (int(ret) != -1):
+        fd = args[0]
+        policy.fd_cache[fd].add_operation(op, args)
+
+def fcntl_rule(policy, op, args, ret):
+    if (int(ret) != -1):
+        fd = args[0]
+        cmd = args[1]
+        if (int(cmd) == fcntl.F_SETLK):
+            args[2] = "0xADDRESS"
+        policy.fd_cache[fd].add_operation(op, args)
+
+# Make sure that we handle dup cases
+# They are the same underlying resource
+def dup_rule(policy, op, args, ret):
+    if (int(ret) != -1):
+        old = args[0]
+        newfd = ret
+        op = policy.fd_cache[old].add_operation(op, args)
+        policy.fd_cache[newfd] = policy.fd_cache[old]
+
+def dup2_rule(policy, op, args, ret):
+    if (int(ret) != -1):
+        old = args[0]
+        newfd = args[1] 
+        op = policy.fd_cache[old].add_operation(op, args)
+        policy.fd_cache[newfd] = policy.fd_cache[old]
+
+def fork_rule(policy, op, args, ret):
+    policy.add_global(op, args)
+    # Pass our FD Cache forward - its okay if some flags are CLOEXEC
+    # We will just overwrite them on the create call
+    create_policy("/tmp/yell.{}.log".format(ret), policy.fd_cache.copy())
+
+def dlopen_rule(policy, op, args, ret):
+    policy.add_global(op, args)
+
+operation_rules = {
+        "open": DEFAULT_CREATE,
+        "openat": DEFAULT_CREATE,
+        "socket": DEFAULT_CREATE,
+        "accept": DEFAULT_CREATE,
+        "accept4": DEFAULT_CREATE,
+        "kqueue": DEFAULT_CREATE,
+        "dlopen": dlopen_rule,
+        "kevent": DEFAULT_FD_0,
+        "read": DEFAULT_FD_0,
+        "write": DEFAULT_FD_0,
+        "fstat": DEFAULT_FD_0,
+        "fsync": DEFAULT_FD_0,
+        "fcntl": fcntl_rule,
+        "dup": dup_rule,
+        "dup2": dup2_rule,
+        "fork": fork_rule,
+        "bind": DEFAULT_FD_0,
+        "listen": DEFAULT_FD_0,
+}
+
+missing_errors = []
+
+def create_policy(trace_file, fd_cache_init = None):
     with open(trace_file) as file:
         data = file.read()
 
     # Get every call, lets throw away the trace for now
-    data = [ d.split("\n")[1] for d in data.split("CALL_SITE:")]
+    data = [ d.split("\n")[1] for d in data.split("CALL_SITE:") if len(d) != 0]
+    
+    first_process = -1
+    for operation in data:
+        operation = operation.split()
+        if not len(operation):
+            continue
+        first_process = operation[0]
+        break
 
+    policies[first_process] = ProcessPolicy()
+    policy = policies[first_process]
+    # Setup Stdin, stdout, stderr, these are innate FD's
+    if fd_cache_init is None:
+        rp = policy.add_policy("STDIN", [])
+        policy.fd_cache["0"] = rp
+        rp = policy.add_policy("STDOUT", [])
+        policy.fd_cache["1"] = rp
+        rp = policy.add_policy("STDERR", [])
+        policy.fd_cache["2"] = rp
+    else:
+        policy.fd_cache = fd_cache_init
+
+    # Keep track of what resources our FD's actually point to.
     # Iterate over every operation now
-    FD_CACHE = {}
-    policy = GlobalPolicy()
     for operation in data:
         operation = operation.split()
         if not len(operation):
             continue
 
-        op = operation[0]
+        process = operation[0]
+        policy = policies[process]
+        op = operation[1]
         args = []
 
-        for d in operation[1:]:
+        for d in operation[2:]:
             if d == "=":
                 break
             args.append(d)
 
         ret = operation[-1]
-        if op in CREATE_CALLS:
-            # Update our FD cache
-            rp = policy.add_policy(op, args)
-            FD_CACHE[ret] = rp
+        try:
+            operation_rules[op](policy, op, args, ret)
+        except Exception as e:
+            missing_errors.append((op, args))
 
-        elif op in EDGE_CALLS:
-            pass
-        elif op in END_CALLS:
-            pass
-        elif op in FB_CALLS:
-            pass
-        else:
-            pass
+def merge_policies():
+    global policies
+    policies = [ x[1] for x in list(policies.items())]
+    merging = policies[0]
+    for p in policies[1:]:
+        merging.merge(p)
 
-    print(FD_CACHE)
-    for p in policy.resources:
-        print(p)
-
+    return merging
 
 if __name__ == "__main__":
-    if not os.path.exists(sys.argv[1]):
-        print("{} does not exist".format(sys.argv[1]))
-        sys.exit(-1)
-
-    create_policy(sys.argv[1])
+    create_policy("/tmp/yell.root.log")
+    policy = merge_policies()
+    print(policy)
+    print()
+    print("Missing Calls:")
+    print(missing_errors)
+        
