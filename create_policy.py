@@ -6,9 +6,10 @@ import glob
 import traceback
 
 class Operation:
-    def __init__(self, op, args):
+    def __init__(self, op, args, ret = None):
         self.op = op
         self.args = args
+        self.ret = ret
 
     def is_same(self, other):
         if (self.op != other.op):
@@ -72,7 +73,11 @@ class ProcessPolicy:
     def __init__(self):
         self.resources = []
         self.global_calls = []
+        self.fdb = {}
         self.fd_cache = {}
+
+    def add_databound(self, op, args, ret):
+        self.fdb[get_var()] = Operation(op, args, ret)
 
     def add_global(self, op, args):
         operation = Operation(op, args)
@@ -126,8 +131,14 @@ class ProcessPolicy:
 
         self.resources.extend(added)
 
+        self.fdb = {**self.fdb, **other.fdb}
+        
+
     def __str__(self):
         fin = ""
+        for var, op in self.fdb.items():
+            fin += "{} = {}\n".format(var, op)
+
         for x in self.global_calls:
             fin += str(x) + "\n"
 
@@ -176,10 +187,35 @@ def fork_rule(policy, op, args, ret):
     policy.add_global(op, args)
     # Pass our FD Cache forward - its okay if some flags are CLOEXEC
     # We will just overwrite them on the create call
-    create_policy("/tmp/yell.{}.log".format(ret), policy.fd_cache.copy())
+    create_policy("/tmp/yell.{}.log".format(ret), policy.fd_cache.copy(), policy.fdb.copy())
 
 def dlopen_rule(policy, op, args, ret):
     policy.add_global(op, args)
+
+VARIABLE_NUM = 0
+def get_var():
+    global VARIABLE_NUM
+    VARIABLE_NUM += 1
+    return "$FDB{}".format(VARIABLE_NUM)
+
+def gethostbyname_rule(policy, op, args, ret):
+    policy.add_databound(op, args, ret)
+
+def getaddrinfo_rule(policy, op, args, ret):
+    policy.add_databound(op, args, ret)
+
+def connect_rule(policy, op, args, ret):
+    fd = args[0]
+    ip = args[5][:-1]
+    for var, fdbop in policy.fdb.items():
+        if fdbop.op in ["gethostbyname", "getaddrinfo"]:
+            # We found a forward binding rule here
+            if (ip == fdbop.ret):
+                args[5] = var + "}"
+
+    args = [args[0]] + [" ".join(args[1:6])] + args[6:]
+    policy.fd_cache[fd].add_operation(op, args)
+
 
 operation_rules = {
         "open": DEFAULT_CREATE,
@@ -187,6 +223,7 @@ operation_rules = {
         "socket": DEFAULT_CREATE,
         "accept": DEFAULT_CREATE,
         "accept4": DEFAULT_CREATE,
+        "connect": connect_rule,
         "kqueue": DEFAULT_CREATE,
         "dlopen": dlopen_rule,
         "kevent": DEFAULT_FD_0,
@@ -200,11 +237,16 @@ operation_rules = {
         "fork": fork_rule,
         "bind": DEFAULT_FD_0,
         "listen": DEFAULT_FD_0,
+
+
+        # Forward Data Binding 
+        "gethostbyname": gethostbyname_rule,
+        "getaddrinfo": getaddrinfo_rule,
 }
 
 missing_errors = []
 
-def create_policy(trace_file, fd_cache_init = None):
+def create_policy(trace_file, fd_cache_init = None, forward_data_bind_init = None):
     with open(trace_file) as file:
         data = file.read()
 
@@ -232,6 +274,9 @@ def create_policy(trace_file, fd_cache_init = None):
     else:
         policy.fd_cache = fd_cache_init
 
+    if forward_data_bind_init is not None:
+        policy.fdb = forward_data_bind_init
+
     # Keep track of what resources our FD's actually point to.
     # Iterate over every operation now
     for operation in data:
@@ -253,7 +298,7 @@ def create_policy(trace_file, fd_cache_init = None):
         try:
             operation_rules[op](policy, op, args, ret)
         except Exception as e:
-            missing_errors.append((op, args))
+            missing_errors.append((op, args, e))
 
 def merge_policies():
     global policies
@@ -264,9 +309,15 @@ def merge_policies():
 
     return merging
 
+DNS_FILES = ["/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/hosts"]
+def purge_dns(policy):
+    policy.resources = [ x for x in policy.resources 
+                        if x.create_call.op != "open" or x.create_call.args[0] not in DNS_FILES ]
+
 if __name__ == "__main__":
     create_policy("/tmp/yell.root.log")
     policy = merge_policies()
+    purge_dns(policy)
     print(policy)
     print()
     print("Missing Calls:")

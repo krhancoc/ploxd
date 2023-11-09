@@ -51,6 +51,20 @@ const char *NSDISPATCH = "nsdispatch";
 			yell(get_backtrace(NULL)); \
 		} \
 	} while(false); 
+std::string 
+hostent_tostring(const struct hostent *ent)
+{
+	std::stringstream ss;
+	if (ent->h_length == 4) {
+		ss << *(uint32_t *)ent->h_addr;
+	}
+
+	if (ent->h_length == 8) {
+		ss << *(uint64_t *)ent->h_addr;
+	}
+
+	return ss.str();
+}
 
 
 std::string 
@@ -309,7 +323,7 @@ struct hostent * __plox_gethostbyname(const char *name)
 {
 	__real_gethostbyname_f = (gethostbyname_f)dlsym(RTLD_NEXT, "gethostbyname");
 	auto hostentret = __real_gethostbyname_f(name);
-	YELL("gethostbyname", name);
+	YELL("gethostbyname", name, "=", hostent_tostring(hostentret));
 	return hostentret;
 }
 
@@ -496,7 +510,11 @@ __plox_dlopen(const char *path, int of)
 {
 	__real_dlopen_f = (dlopen_f)dlsym(RTLD_NEXT, "dlopen");
 	void *ret = __real_dlopen_f(path, of);
-	YELL("dlopen", path, of, "=", ret);
+	if (path == NULL) {
+		YELL("dlopen", 0x0, of, "=", ret);
+	} else {
+		YELL("dlopen", path, of, "=", ret);
+	}
 	return ret;
 }
 
@@ -523,5 +541,5 @@ BIND_REF(accept);
 BIND_REF(accept4);
 BIND_REF(bind);
 BIND_REF(listen);
-BIND_REF(dlopen);
+BIND_REF(dlopen)
 } // EXTERN C
