@@ -9,6 +9,11 @@ target_include_directories(ploxd PRIVATE .)
 target_link_libraries(ploxd fmt::fmt)
 target_link_libraries(containerd fmt::fmt)
 
+target_include_directories(ploxd PUBLIC /usr/include/)
+target_link_directories(ploxd PUBLIC /usr/lib/)
+target_link_libraries(ploxd /usr/lib/libplox.a)
+
+
 # add_executable(client client.cc)
 # target_include_directories(client PRIVATE ../include)
 # target_include_directories(client PRIVATE .)

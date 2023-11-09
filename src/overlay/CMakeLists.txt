@@ -3,7 +3,7 @@ target_include_directories(overlay PRIVATE ../../include)
 target_include_directories(overlay PRIVATE .)
 
 if (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
-	target_link_libraries(overlay /usr/local/lib/x86_64-unknown-freebsd13.2/libunwind.so)
+	target_link_libraries(overlay /usr/local/lib/libunwind.so)
 else()
   message(FATAL_ERROR "Lambda requires to be built and run on FreeBSD")
 endif()
