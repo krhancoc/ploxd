@@ -1,3 +1,5 @@
+#include <plox.h>
+
 #include "policy.h"
 
 PloxPolicy::PloxPolicy(std::string &&filename) {
@@ -9,5 +11,6 @@ PloxPolicy::PloxPolicy(std::string &&filename) {
  */
 int PloxPolicy::setupPolicy(int pid)
 {
+	plox_register(pid);
 	return 0;
 }
