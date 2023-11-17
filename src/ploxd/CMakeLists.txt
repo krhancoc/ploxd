@@ -2,12 +2,12 @@ find_package(fmt REQUIRED)
 
 add_executable(ploxd ploxd.cc policy.cc)
 add_executable(plox plox.cc)
-add_executable(containerd containerd.cc)
 target_include_directories(ploxd PRIVATE ../../include)
+target_include_directories(ploxd PRIVATE ../../kplox/include)
 target_include_directories(ploxd PRIVATE .)
 
+
 target_link_libraries(ploxd fmt::fmt)
-target_link_libraries(containerd fmt::fmt)
 
 target_include_directories(ploxd PUBLIC /usr/include/)
 target_link_directories(ploxd PUBLIC /usr/lib/)

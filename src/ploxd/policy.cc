@@ -11,6 +11,8 @@ PloxPolicy::PloxPolicy(std::string &&filename) {
  */
 int PloxPolicy::setupPolicy(int pid)
 {
-	plox_register(pid);
+	int error = plox_register(pid);
+  if (error)
+    perror("Error settting up policy\n");
 	return 0;
 }

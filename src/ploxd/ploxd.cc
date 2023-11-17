@@ -3,10 +3,12 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
 
 #include <filesystem>
 #include <string>
@@ -17,6 +19,14 @@
 #include "policy.h"
 
 const std::filesystem::path PLOX_DEVICE = "/dev/plox";
+pid_t currentApplication = -1;
+
+static void sigint_handler(int signum) 
+{
+  INFO("Shutting down! {}", currentApplication);
+  kill(currentApplication, SIGKILL);
+  waitpid(currentApplication, NULL, 0);
+}
 
 int ServiceLibCServices(int sock)
 {
@@ -61,6 +71,8 @@ CreateServerSocket()
 	return serverSocket;
 }
 
+
+
 void 
 HandleConnection(int connection)
 {
@@ -69,15 +81,15 @@ HandleConnection(int connection)
 
 	auto policy = PloxPolicy("policyfile");
 
-	memset(buffer, '\0', 4096);
-	int readin = read(connection, buffer, 4096);
+  struct PloxProgCommand prog;
+	int readin = read(connection, &prog, sizeof(prog));
 	if (readin < 0) {
 		perror("issue");
 		close(connection);
 		return;
 	}
 
-	std::string program = std::string(buffer, strlen(buffer));
+	std::string program = std::string(prog.args[0], strlen(prog.args[0]));
 
 	int error = socketpair(AF_LOCAL, SOCK_STREAM, 0, pairs);
 	if (error) {
@@ -90,10 +102,14 @@ HandleConnection(int connection)
 	std::vector<std::string> args;
 	std::vector<char *> argv;
 
+	std::vector<std::string> env;
+	std::vector<char *> envp;
+
 	args.push_back(program);
 
-	// Place the socket to ploxd as the last argument
-	args.push_back(std::to_string(pairs[1]));
+  for(int i = 1; i < prog.NumArgs; i++) {
+    args.push_back(std::string(prog.args[i], strlen(prog.args[i])));
+  }
 
 	for (auto &arg: args) {
 		argv.push_back((char *)arg.c_str());
@@ -103,6 +119,14 @@ HandleConnection(int connection)
 
 	fcntl(pairs[0], F_SETFD, FD_CLOEXEC);
 
+	env.push_back("LD_PRELOAD=/home/ryan/ploxd/build/src/shim/libshim.so");
+	snprintf(buffer, 1024, "PLOXD_SOCKET=%d", pairs[1]);
+	env.push_back(std::string(buffer, strlen(buffer)));
+	for (auto &e : env) {
+		envp.push_back((char *)e.c_str());
+	}
+	envp.push_back(nullptr);
+
 	int pid = fork();
 	if (pid) {
 		int error = policy.setupPolicy(pid);
@@ -111,6 +135,8 @@ HandleConnection(int connection)
 			return;
 		}
 
+    currentApplication = pid;
+
 		error = SendStartMessage(pairs[0]);
 		if (error) {
 			ERROR("Problem with sending message to container");
@@ -118,8 +144,19 @@ HandleConnection(int connection)
 		}
 
 		ServiceLibCServices(pairs[0]);
+    pid_t wpid;
+    int status = 0;
+    while((wpid = wait(&status)) > 0);
+
 	} else {
-		if (execve("/usr/home/ryan/ploxd/build/src/ploxd/containerd", argv.data(), NULL) == -1) {
+    // Wait for confirmation from containerd
+    int readin = read(pairs[1], buffer, 1024);
+    if (readin < 0) {
+      perror("[Container] Error getting confirmation, shutting down");
+      return;
+    }
+
+		if (execve(argv[0], argv.data(), envp.data()) == -1) {
 			perror("execve");
 			return;
 		}
@@ -154,6 +191,11 @@ main(int argc, char *argv[])
 		perror("Error");
 		return -1;
 	}
+
+  if (signal(SIGINT, &sigint_handler) == SIG_ERR) {
+    perror("Error setting up sigkill handler");
+    return -1;
+  }
 
 	struct kevent event;
 	while (true) {

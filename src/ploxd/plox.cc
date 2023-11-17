@@ -38,8 +38,13 @@ main(int argc, char *argv[])
 
 		return -1;
 	}
-
-	write(plx, argv[1], strlen(argv[1]));
+  struct PloxProgCommand prog;
+  for (int i = 1; i < argc; i++) {
+    memcpy(prog.args[i-1], argv[i], strlen(argv[i]) + 1);
+  }
+  prog.NumArgs = argc - 1;
+  
+	write(plx, &prog, sizeof(prog));
 
 	return 0;
 }

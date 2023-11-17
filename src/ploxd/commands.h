@@ -3,4 +3,9 @@
 
 const char *SOCK_PATH = "/tmp/ploxd";
 
+struct PloxProgCommand {
+  char args[8][256];
+  int NumArgs;
+};
+
 #endif
