@@ -3,8 +3,8 @@ project(ploxd VERSION 1.0 DESCRIPTION "Lambda Container Library")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_C_COMPILER clang15)
-set(CMAKE_CPP_COMPILER clang++15)
+set(CMAKE_C_COMPILER clang14)
+set(CMAKE_CPP_COMPILER clang++14)
 
 link_directories(/usr/local/lib)
 

@@ -15,7 +15,7 @@
 #define LEVEL_OFF   (6)
 
 #ifndef ACTIVE_LEVEL
-#define ACTIVE_LEVEL (LEVEL_DEBUG)
+#define ACTIVE_LEVEL (LEVEL_OFF)
 #endif
 
 #define PRINT(inputstr, type, ...) \

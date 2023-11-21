@@ -208,7 +208,6 @@ main(int argc, char *argv[])
 		if (nev > 0) {
 			if (event.filter == EVFILT_READ) {
 				int connection = accept4(serverSocket, NULL, NULL, SOCK_CLOEXEC);
-				INFO("Information available on FD {}", connection);
 				HandleConnection(connection);
 			}
 		}
